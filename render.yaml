@@ -1,0 +1,19 @@
+# Render Blueprint — Doclinth PDF-pain Reddit monitor
+# Deploys doclinth_monitor.py as a scheduled cron job that pushes new
+# PDF-generation pain threads to your Discord channel.
+#
+# One-time: in the Render dashboard set the DISCORD_WEBHOOK_URL env var
+# (sync:false means Render prompts you for it instead of storing it in git).
+services:
+  - type: cron
+    name: doclinth-pdf-monitor
+    runtime: python
+    plan: starter                 # cron billed per-second, ~$1/mo minimum
+    schedule: "0 9 * * *"         # daily at 09:00 UTC — edit to taste
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python doclinth_monitor.py"
+    envVars:
+      - key: DISCORD_WEBHOOK_URL
+        sync: false               # you paste this in the dashboard, not in git
+      - key: REDDIT_TIME_WINDOW
+        value: day                # daily run + 24h window = no duplicate alerts
