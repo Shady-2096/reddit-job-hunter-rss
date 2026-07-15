@@ -42,24 +42,26 @@ import requests
 # ============== CONFIGURATION ==============
 
 # Subreddits to scan (no "r/" prefix). Public, no auth needed.
+# Trimmed to the 20 highest-value subs for PDF-generation pain: Reddit throttles
+# the runner's IP to ~32s/sub, so a full sweep of all 34 took ~18 min and timed
+# out. 20 subs finishes in ~11 min, comfortably inside a 30-minute cadence.
 SUBREDDITS = [
     # --- core web/backend dev (where PDF-gen pain lives) ---
-    "webdev", "node", "javascript", "reactjs", "nextjs", "typescript",
-    "Python", "django", "flask", "PHP", "laravel", "rubyonrails", "ruby",
-    "dotnet", "csharp", "golang", "java", "rust",
+    "webdev", "javascript", "node", "reactjs", "nextjs", "typescript",
+    "Python", "django", "PHP", "laravel",
     # --- infra / serverless / where headless-chrome pain bites ---
-    "aws", "serverless", "devops", "docker", "selfhosted", "webhosting",
+    "aws", "serverless", "docker", "selfhosted", "devops",
     # --- builders / buyers who ship documents ---
-    "SaaS", "SideProject", "indiehackers", "webdevelopment", "flutterdev",
+    "SaaS", "SideProject", "indiehackers",
     # --- automation / no-code (can't run a browser, need a PDF step) ---
-    "n8n", "nocode", "Zapier", "automation", "make",
+    "n8n", "Zapier",
 ]
 
 OUTPUT_CSV = Path(__file__).parent / "doclinth_signals.csv"
 
 # Durable dedup memory (post_id -> first-seen ISO timestamp). The GitHub Actions
 # workflow commits this file back to the repo after each run, so it survives the
-# ephemeral runner between 10-minute scans. That's what stops the same post from
+# ephemeral runner between scans. That's what stops the same post from
 # being pushed to Discord more than once, even though a fresh runner starts with
 # no other state and the "hour" scan window deliberately overlaps between runs.
 SEEN_IDS_JSON = Path(__file__).parent / "seen_ids.json"

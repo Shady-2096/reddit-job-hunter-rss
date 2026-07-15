@@ -2,11 +2,13 @@ name: Doclinth Reddit Monitor
 
 on:
   schedule:
-    # Every 10 minutes. GitHub often runs scheduled jobs a few minutes late and
-    # occasionally skips one under load — that's fine here: the "hour" scan
-    # window overlaps run-to-run, so a late/skipped tick never misses a post,
-    # and seen_ids.json dedup means the overlap never produces a repeat alert.
-    - cron: "*/10 * * * *"
+    # Every 30 minutes. A full sweep of 20 subs takes ~11 min (Reddit throttles
+    # the runner IP to ~32s/sub), so 30 min leaves comfortable headroom. GitHub
+    # often runs scheduled jobs a few minutes late and occasionally skips one
+    # under load — fine here: the "hour" scan window overlaps run-to-run, so a
+    # late/skipped tick never misses a post, and seen_ids.json dedup means the
+    # overlap never produces a repeat alert.
+    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 # Never let two runs overlap — they'd race on seen_ids.json. A new tick waits
@@ -22,7 +24,9 @@ permissions:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # ~11 min expected; 20 gives margin for a slow throttling day without
+    # letting a wedged run burn Actions minutes.
+    timeout-minutes: 20
 
     steps:
       - name: Check out repository
