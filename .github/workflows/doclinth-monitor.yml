@@ -2,18 +2,27 @@ name: Doclinth Reddit Monitor
 
 on:
   schedule:
-    # Match the Render cron's daily cadence, but avoid the top-of-hour rush.
-    - cron: "7 9 * * *"
+    # Every 10 minutes. GitHub often runs scheduled jobs a few minutes late and
+    # occasionally skips one under load — that's fine here: the "hour" scan
+    # window overlaps run-to-run, so a late/skipped tick never misses a post,
+    # and seen_ids.json dedup means the overlap never produces a repeat alert.
+    - cron: "*/10 * * * *"
   workflow_dispatch:
 
+# Never let two runs overlap — they'd race on seen_ids.json. A new tick waits
+# for the in-flight run to finish (and to push its updated memory) first.
 concurrency:
   group: doclinth-reddit-monitor
   cancel-in-progress: false
 
+# Needed so the run can commit the updated seen_ids.json back to the repo.
+permissions:
+  contents: write
+
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
 
     steps:
       - name: Check out repository
@@ -31,5 +40,29 @@ jobs:
         run: python -u doclinth_monitor.py
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          # The runner is temporary, so use the daily window to avoid repeats.
-          REDDIT_TIME_WINDOW: day
+          # 1h window: wide enough to overlap between 10-min runs (no gaps if a
+          # tick is late/skipped), narrow enough that dedup stays cheap.
+          REDDIT_TIME_WINDOW: hour
+
+      - name: Persist dedup memory
+        run: |
+          # Only seen_ids.json is ever committed — CSV/log output stays local.
+          if [[ -z "$(git status --porcelain seen_ids.json)" ]]; then
+            echo "No new posts this run; seen_ids.json unchanged."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add seen_ids.json
+          git commit -m "Update seen_ids.json [skip ci]"
+          # Runs are serialized, but rebase + retry keeps the push robust against
+          # any transient drift so a seen id is never lost (which would re-alert).
+          for attempt in 1 2 3; do
+            if git pull --rebase --autostash origin "${{ github.ref_name }}" && git push; then
+              echo "Pushed updated seen_ids.json."
+              exit 0
+            fi
+            echo "Push attempt $attempt failed; retrying..."
+            sleep 3
+          done
+          echo "::warning::Could not push seen_ids.json; next run may re-alert a post."

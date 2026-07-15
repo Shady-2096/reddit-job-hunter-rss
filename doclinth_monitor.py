@@ -57,6 +57,17 @@ SUBREDDITS = [
 
 OUTPUT_CSV = Path(__file__).parent / "doclinth_signals.csv"
 
+# Durable dedup memory (post_id -> first-seen ISO timestamp). The GitHub Actions
+# workflow commits this file back to the repo after each run, so it survives the
+# ephemeral runner between 10-minute scans. That's what stops the same post from
+# being pushed to Discord more than once, even though a fresh runner starts with
+# no other state and the "hour" scan window deliberately overlaps between runs.
+SEEN_IDS_JSON = Path(__file__).parent / "seen_ids.json"
+# How long to remember a post id. Only needs to outlast how long a post can keep
+# showing up in the scan window (~1h with t=hour); a few days is a safe cushion
+# and keeps the file to a few hundred ids at most.
+SEEN_ID_RETENTION_DAYS = 3
+
 # Reddit search time window: "all", "year", "month", "week", "day".
 # Local first sweep: "month". On Render (daily cron), set env REDDIT_TIME_WINDOW=day
 # so each run only sees the last 24h -> no duplicate Discord alerts, no state file.
@@ -135,8 +146,13 @@ CSV_COLUMNS = [
 class DemandSignalScanner:
     def __init__(self):
         self.csv_path = OUTPUT_CSV
+        self.seen_path = SEEN_IDS_JSON
         self.compiled = {n: re.compile(s["pattern"], re.I) for n, s in SIGNALS.items()}
         self.existing_ids = self._load_existing_ids()
+        # Fold the durable memory into the skip-set so notify only fires for
+        # posts we've genuinely never alerted on before.
+        self._seen = self._load_seen_ids()
+        self.existing_ids.update(self._seen.keys())
         self.hits = {}  # post_id -> row dict (deduped across signals/subs)
         self.comment_fetches = 0
         self._lock = threading.Lock()          # guards self.hits + counters
@@ -181,6 +197,44 @@ class DemandSignalScanner:
             except (IOError, csv.Error) as e:
                 print(f"  [!] Could not read existing CSV: {e}")
         return ids
+
+    def _load_seen_ids(self):
+        """Load the durable dedup memory written by the previous run."""
+        if not self.seen_path.exists():
+            return {}
+        try:
+            with open(self.seen_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except (IOError, ValueError) as e:
+            print(f"  [!] Could not read {self.seen_path.name}: {e}")
+            return {}
+
+    def _save_seen_ids(self):
+        """Fold this run's new ids into the memory, prune old ones, write it out.
+
+        Only called when there are new hits, so a quiet run leaves the file
+        byte-for-byte unchanged and the workflow's commit step is a no-op.
+        """
+        now = datetime.now(timezone.utc)
+        cutoff = now.timestamp() - SEEN_ID_RETENTION_DAYS * 86400
+        stamp = now.isoformat(timespec="seconds")
+        merged = dict(self._seen)
+        for pid in self.hits:
+            merged.setdefault(pid, stamp)
+        pruned = {}
+        for pid, ts in merged.items():
+            try:
+                keep = datetime.fromisoformat(ts).timestamp() >= cutoff
+            except (ValueError, TypeError):
+                keep = True  # keep unparseable entries rather than risk a dupe
+            if keep:
+                pruned[pid] = ts
+        tmp = self.seen_path.with_suffix(".json.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(pruned, f, indent=0, sort_keys=True)
+        tmp.replace(self.seen_path)
+        print(f"[=] {self.seen_path.name} updated ({len(pruned)} ids retained).")
 
     @staticmethod
     def _extract_post_id(link):
@@ -379,7 +433,8 @@ class DemandSignalScanner:
             return
         print(f"Subreddits : {len(SUBREDDITS)}  |  Signals: {len(SIGNALS)}  |  Window: {TIME_WINDOW}")
         print(f"Date floor : {MIN_POST_DATE}  |  Comments: {FETCH_COMMENTS}")
-        print(f"Already in CSV: {len(self.existing_ids)} post(s)\n")
+        print(f"Already seen: {len(self.existing_ids)} post(s) "
+              f"({len(self._seen)} from durable memory)\n")
 
         t0 = time.time()
         self._search_pass()
@@ -393,6 +448,11 @@ class DemandSignalScanner:
 
         # Push new threads to Discord (the durable output on Render).
         self._notify_discord()
+
+        # Record what we just alerted on so the next run won't repeat it.
+        # Skipped entirely on quiet runs to keep the committed file stable.
+        if self.hits:
+            self._save_seen_ids()
 
         if FETCH_COMMENTS and self.hits:
             self._comment_pass()
