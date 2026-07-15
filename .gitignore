@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Scan outputs (regenerated each run; not meant to be published)
+doclinth_signals.csv
+demand_signals*.csv
+*.log
+
+# Local research / strategy notes — keep these off GitHub
+findings.md
+findings.py
+analyze.py
+pain_points_report.md
+product_opportunities.md
+
+# Note: seen_ids.json is intentionally NOT ignored — the workflow commits it
+# back to the repo as the durable dedup memory.

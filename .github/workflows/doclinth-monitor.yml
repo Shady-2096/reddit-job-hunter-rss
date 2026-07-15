@@ -10,6 +10,11 @@ on:
     # overlap never produces a repeat alert.
     - cron: "*/30 * * * *"
   workflow_dispatch:
+    inputs:
+      time_window:
+        description: "Search window for a manual run (hour/day/week/month). Wider = older posts too — handy for a one-off test. Scheduled runs always use hour."
+        required: false
+        default: hour
 
 # Never let two runs overlap — they'd race on seen_ids.json. A new tick waits
 # for the in-flight run to finish (and to push its updated memory) first.
@@ -44,9 +49,9 @@ jobs:
         run: python -u doclinth_monitor.py
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          # 1h window: wide enough to overlap between 10-min runs (no gaps if a
-          # tick is late/skipped), narrow enough that dedup stays cheap.
-          REDDIT_TIME_WINDOW: hour
+          # 1h window on the schedule (overlaps run-to-run so nothing slips
+          # through); a manual run can widen it via the workflow_dispatch input.
+          REDDIT_TIME_WINDOW: ${{ github.event.inputs.time_window || 'hour' }}
 
       - name: Persist dedup memory
         run: |
